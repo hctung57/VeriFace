@@ -1,5 +1,7 @@
 """Khai báo model dữ liệu cho API."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -22,6 +24,10 @@ class BrowserRecognitionRequest(BaseModel):
 
     image_base64: str = Field(..., min_length=32, description="Ảnh JPEG dạng data URL base64")
     reference_ids: list[str] = Field(default_factory=list, description="Danh sách ID khuôn mặt cần đối chiếu")
+    result_mode: Literal["all", "matched-only"] = Field(
+        default="all",
+        description="Chế độ trả kết quả: all hoặc matched-only",
+    )
 
 
 class FaceDetectionResult(BaseModel):

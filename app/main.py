@@ -73,7 +73,7 @@ async def delete_reference(reference_id: str) -> ApiMessage:
     """Xóa một khuôn mặt tham chiếu; ví dụ: DELETE /api/references/{reference_id}."""
 
     face_registry.delete_reference(reference_id)
-    return ApiMessage(message="Đã xóa khuôn mặt tham chiếu")
+    return ApiMessage(message="Reference face deleted")
 
 
 @app.get("/api/references/{reference_id}/image")
@@ -82,7 +82,7 @@ async def get_reference_image(reference_id: str) -> FileResponse:
 
     image_path: Path = face_registry.get_reference_image_path(reference_id)
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Không tìm thấy file ảnh tham chiếu")
+        raise HTTPException(status_code=404, detail="Reference image file not found")
     return FileResponse(path=str(image_path))
 
 
@@ -130,7 +130,22 @@ async def browser_recognition(payload: BrowserRecognitionRequest) -> BrowserReco
             )
         )
 
-    return BrowserRecognitionResponse(detections=detections)
+    filtered_detections: list[FaceDetectionResult] = _filter_recognition_detections(
+        detections=detections,
+        result_mode=payload.result_mode,
+    )
+    return BrowserRecognitionResponse(detections=filtered_detections)
+
+
+def _filter_recognition_detections(
+    detections: list[FaceDetectionResult],
+    result_mode: str,
+) -> list[FaceDetectionResult]:
+    """Lọc danh sách detection theo chế độ hiển thị; ví dụ: _filter_recognition_detections(detections, 'matched-only')."""
+
+    if result_mode == "matched-only":
+        return [detection for detection in detections if detection.is_match]
+    return detections
 
 
 @app.post("/api/browser-detect", response_model=BrowserDetectResponse)
@@ -194,7 +209,7 @@ def _decode_browser_image(image_base64: str) -> np.ndarray:
     """Giải mã data URL base64 thành ảnh RGB; ví dụ: _decode_browser_image('data:image/jpeg;base64,...')."""
 
     if "," not in image_base64:
-        raise ValueError("image_base64 không đúng định dạng data URL")
+        raise ValueError("image_base64 is not a valid data URL")
 
     _, encoded_payload = image_base64.split(",", maxsplit=1)
     jpeg_bytes: bytes = base64.b64decode(encoded_payload)
@@ -202,7 +217,7 @@ def _decode_browser_image(image_base64: str) -> np.ndarray:
     frame_bgr: np.ndarray | None = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
 
     if frame_bgr is None:
-        raise ValueError("Không thể decode ảnh từ image_base64")
+        raise ValueError("Unable to decode image from image_base64")
     return cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
 

@@ -3,12 +3,23 @@ const referenceListElement = document.querySelector('#reference-list');
 const referenceCardTemplateElement = document.querySelector('#reference-card-template');
 const browserStartButtonElement = document.querySelector('#browser-start-btn');
 const browserStopButtonElement = document.querySelector('#browser-stop-btn');
-const browserSendButtonElement = document.querySelector('#browser-send-btn');
 const browserVideoElement = document.querySelector('#browser-video');
-const browserOverlayElement = document.querySelector('#browser-overlay');
 const browserStatusElement = document.querySelector('#browser-status');
+const samplingIntervalRangeElement = document.querySelector('#sampling-interval');
+const samplingIntervalValueElement = document.querySelector('#sampling-interval-value');
+const referenceLabelInputElement = document.querySelector('#reference-label');
+const referenceImageInputElement = document.querySelector('#reference-image');
+const referenceUploadWrapElement = document.querySelector('.file-upload-wrap');
+const referenceUploadPreviewElement = document.querySelector('#reference-image-preview');
+const referenceUploadSubmitButtonElement = document.querySelector('#reference-upload-submit');
+const resultsFilterElement = document.querySelector('#results-filter');
+const resultsFilterButtonElements = document.querySelectorAll('.results-filter-btn');
 const resultsListElement = document.querySelector('#results-list');
 const resultItemTemplateElement = document.querySelector('#result-item-template');
+
+const MIN_SAMPLING_INTERVAL_MS = 100;
+const MAX_SAMPLING_INTERVAL_MS = 5000;
+const DEFAULT_SAMPLING_INTERVAL_MS = 1000;
 
 const state = {
   references: [],
@@ -16,12 +27,15 @@ const state = {
     mediaStream: null,
     isRunning: false,
     timerId: null,
-    detectedFaces: [],
+    requestInFlight: false,
     lastFrameCanvas: document.createElement('canvas'),
-    faceDetector: null,
-    detectionMode: 'native',
+    captureScale: 0.65,
+    frameIntervalMs: DEFAULT_SAMPLING_INTERVAL_MS,
+    jpegQuality: 0.62,
   },
   results: [],
+  resultsFilter: 'matched-only',
+  uploadPreviewObjectUrl: null,
 };
 
 function validateRequiredElements() {
@@ -31,10 +45,16 @@ function validateRequiredElements() {
     referenceCardTemplate: referenceCardTemplateElement,
     browserStartBtn: browserStartButtonElement,
     browserStopBtn: browserStopButtonElement,
-    browserSendBtn: browserSendButtonElement,
     browserVideo: browserVideoElement,
-    browserOverlay: browserOverlayElement,
-    browserStatus: browserStatusElement,
+    samplingIntervalRange: samplingIntervalRangeElement,
+    samplingIntervalValue: samplingIntervalValueElement,
+    referenceLabelInput: referenceLabelInputElement,
+    referenceImageInput: referenceImageInputElement,
+    referenceUploadWrap: referenceUploadWrapElement,
+    referenceUploadPreview: referenceUploadPreviewElement,
+    referenceUploadSubmitBtn: referenceUploadSubmitButtonElement,
+    resultsFilter: resultsFilterElement,
+    resultsFilterButtons: resultsFilterButtonElements.length > 0 ? resultsFilterButtonElements : null,
     resultsList: resultsListElement,
     resultItemTemplate: resultItemTemplateElement,
   };
@@ -60,47 +80,127 @@ async function apiRequest(url, options = {}) {
     }
     throw new Error(detailText);
   }
+
   const hasBody = response.status !== 204;
   return hasBody ? response.json() : null;
 }
 
 function showToast(messageText, isError = false) {
+  let toastStackElement = document.querySelector('#app-toast-stack');
+  if (!toastStackElement) {
+    toastStackElement = document.createElement('div');
+    toastStackElement.id = 'app-toast-stack';
+    toastStackElement.className = 'app-toast-stack';
+    document.body.append(toastStackElement);
+  }
+
   const toastElement = document.createElement('div');
   toastElement.textContent = messageText;
-  toastElement.className = isError ? 'chip err' : 'chip ok';
-  referenceListElement.prepend(toastElement);
-  window.setTimeout(() => toastElement.remove(), 2200);
+  toastElement.className = isError ? 'app-toast app-toast-error' : 'app-toast';
+  toastStackElement.append(toastElement);
+  window.setTimeout(() => {
+    toastElement.remove();
+    if (toastStackElement && toastStackElement.children.length === 0) {
+      toastStackElement.remove();
+    }
+  }, 2600);
+}
+
+function updateUploadSubmitState() {
+  const hasName = referenceLabelInputElement.value.trim().length > 0;
+  const hasImage = Boolean(referenceImageInputElement.files && referenceImageInputElement.files.length > 0);
+  referenceUploadSubmitButtonElement.disabled = !(hasName && hasImage);
+}
+
+function updateSelectedFileName() {
+  const hasImage = Boolean(referenceImageInputElement.files && referenceImageInputElement.files.length > 0);
+
+  if (state.uploadPreviewObjectUrl) {
+    URL.revokeObjectURL(state.uploadPreviewObjectUrl);
+    state.uploadPreviewObjectUrl = null;
+  }
+
+  if (!hasImage) {
+    referenceUploadWrapElement.classList.remove('has-file');
+    referenceUploadPreviewElement.removeAttribute('src');
+    return;
+  }
+
+  const selectedFile = referenceImageInputElement.files[0];
+  referenceUploadWrapElement.classList.add('has-file');
+  state.uploadPreviewObjectUrl = URL.createObjectURL(selectedFile);
+  referenceUploadPreviewElement.src = state.uploadPreviewObjectUrl;
 }
 
 function setBrowserStatus(statusText, isError = false) {
+  if (!browserStatusElement) {
+    return;
+  }
+
   browserStatusElement.textContent = `Status: ${statusText}`;
   browserStatusElement.className = isError ? 'stream-stats err' : 'stream-stats';
 }
 
+function formatSamplingIntervalText(intervalMs) {
+  if (intervalMs < 1000) {
+    return `${intervalMs} ms`;
+  }
+  if (intervalMs < 60000) {
+    return `${(intervalMs / 1000).toFixed(1)} s`;
+  }
+
+  const minutes = Math.floor(intervalMs / 60000);
+  const seconds = Math.floor((intervalMs % 60000) / 1000);
+  return seconds > 0 ? `${minutes} min ${seconds}s` : `${minutes} min`;
+}
+
+function applySamplingInterval(nextIntervalMs) {
+  const safeIntervalMs = Math.min(MAX_SAMPLING_INTERVAL_MS, Math.max(MIN_SAMPLING_INTERVAL_MS, nextIntervalMs));
+  state.browser.frameIntervalMs = safeIntervalMs;
+
+  if (samplingIntervalRangeElement) {
+    samplingIntervalRangeElement.value = String(safeIntervalMs);
+  }
+  if (samplingIntervalValueElement) {
+    samplingIntervalValueElement.textContent = formatSamplingIntervalText(safeIntervalMs);
+  }
+
+  // Neu webcam dang chay, cap nhat timer de tan so moi co hieu luc ngay.
+  if (state.browser.isRunning && state.browser.timerId !== null) {
+    window.clearTimeout(state.browser.timerId);
+    state.browser.timerId = window.setTimeout(processRecognitionFrame, state.browser.frameIntervalMs);
+  }
+}
+
+function syncResultsFilterUi() {
+  resultsFilterButtonElements.forEach((filterButtonElement) => {
+    const filterMode = filterButtonElement.dataset.filterMode || 'all';
+    filterButtonElement.classList.toggle('is-active', filterMode === state.resultsFilter);
+  });
+}
+
 function getSelectedReferenceIds() {
-  const selectedInputs = referenceListElement.querySelectorAll('input[type="checkbox"]:checked');
-  return [...selectedInputs].map((inputElement) => inputElement.value);
+  return [];
+}
+
+function getEffectiveReferenceIds() {
+  // Khong con checkbox chon rieng, mac dinh so khop voi toan bo reference da upload.
+  return state.references.map((referenceItem) => referenceItem.reference_id);
 }
 
 function renderReferenceList() {
   referenceListElement.innerHTML = '';
   if (state.references.length === 0) {
-    const emptyElement = document.createElement('p');
-    emptyElement.className = 'empty-references';
-    emptyElement.textContent = 'No reference faces yet. Upload your first image to begin.';
-    referenceListElement.append(emptyElement);
     return;
   }
 
   state.references.forEach((referenceItem) => {
     const cardFragment = referenceCardTemplateElement.content.cloneNode(true);
-    const checkboxElement = cardFragment.querySelector('.reference-select');
     const imageElement = cardFragment.querySelector('.reference-photo');
     const nameElement = cardFragment.querySelector('.reference-name');
     const idElement = cardFragment.querySelector('.reference-id');
     const deleteButtonElement = cardFragment.querySelector('.reference-delete');
 
-    checkboxElement.value = referenceItem.reference_id;
     imageElement.src = `/api/references/${referenceItem.reference_id}/image`;
     imageElement.alt = `Reference: ${referenceItem.label}`;
     nameElement.textContent = referenceItem.label;
@@ -121,100 +221,147 @@ function renderReferenceList() {
 }
 
 async function refreshReferences() {
-  state.references = await apiRequest('/api/references');
+  const referenceItems = await apiRequest('/api/references');
+  // Hien thi item moi nhat o dau strip.
+  state.references = referenceItems.slice().reverse();
   renderReferenceList();
 }
 
-function syncBrowserCanvasSize() {
+function syncCaptureCanvasSize() {
   const videoWidth = browserVideoElement.videoWidth;
   const videoHeight = browserVideoElement.videoHeight;
   if (videoWidth <= 0 || videoHeight <= 0) {
     return;
   }
 
-  browserOverlayElement.width = videoWidth;
-  browserOverlayElement.height = videoHeight;
-  state.browser.lastFrameCanvas.width = videoWidth;
-  state.browser.lastFrameCanvas.height = videoHeight;
+  state.browser.lastFrameCanvas.width = Math.max(1, Math.floor(videoWidth * state.browser.captureScale));
+  state.browser.lastFrameCanvas.height = Math.max(1, Math.floor(videoHeight * state.browser.captureScale));
 }
 
-function drawDetectedFaces(faces) {
-  const context2D = browserOverlayElement.getContext('2d');
-  if (!context2D) {
+function buildFaceCropDataUrl(frameCanvas, detection) {
+  const frameWidth = frameCanvas.width;
+  const frameHeight = frameCanvas.height;
+  const boxWidth = Math.max(1, detection.right - detection.left);
+  const boxHeight = Math.max(1, detection.bottom - detection.top);
+  const paddingX = Math.floor(boxWidth * 0.15);
+  const paddingY = Math.floor(boxHeight * 0.15);
+
+  // Mo rong crop 15% moi chieu de nhin ro khuon mat hon.
+  const left = Math.max(0, Math.min(frameWidth - 1, detection.left - paddingX));
+  const top = Math.max(0, Math.min(frameHeight - 1, detection.top - paddingY));
+  const right = Math.max(left + 1, Math.min(frameWidth, detection.right + paddingX));
+  const bottom = Math.max(top + 1, Math.min(frameHeight, detection.bottom + paddingY));
+
+  const cropWidth = right - left;
+  const cropHeight = bottom - top;
+  const cropCanvas = document.createElement('canvas');
+  const cropContext = cropCanvas.getContext('2d');
+  cropCanvas.width = cropWidth;
+  cropCanvas.height = cropHeight;
+
+  cropContext.drawImage(frameCanvas, left, top, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return cropCanvas.toDataURL('image/jpeg', 0.86);
+}
+
+function addDetectionsToHistory(detections, frameCanvas) {
+  if (!detections || detections.length === 0) {
     return;
   }
 
-  context2D.clearRect(0, 0, browserOverlayElement.width, browserOverlayElement.height);
+  const timestampText = new Date().toLocaleTimeString();
+  const batchResults = detections.map((detection) => {
+    const distanceValue = Number(detection.distance ?? 1);
+    const identityText = detection.label || 'Unknown';
 
-  faces.forEach((face, index) => {
-    const width = face.right - face.left;
-    const height = face.bottom - face.top;
-    context2D.strokeStyle = '#4a9eff';
-    context2D.lineWidth = 2;
-    context2D.strokeRect(face.left, face.top, width, height);
-
-    context2D.fillStyle = '#4a9eff';
-    context2D.fillRect(face.left, Math.max(0, face.top - 24), 30, 22);
-    context2D.fillStyle = '#ffffff';
-    context2D.font = '12px Barlow';
-    context2D.fillText(`#${index + 1}`, face.left + 7, Math.max(14, face.top - 8));
-  });
-}
-
-async function initFaceDetector() {
-  // Uu tien FaceDetector native neu trinh duyet ho tro.
-  if ('FaceDetector' in window) {
-    try {
-      state.browser.faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
-      state.browser.detectionMode = 'native';
-      return;
-    } catch {
-      state.browser.faceDetector = null;
-    }
-  }
-
-  state.browser.detectionMode = 'server';
-}
-
-async function detectFacesViaServer(canvasElement) {
-  const frameBase64 = canvasElement.toDataURL('image/jpeg', 0.65);
-  const response = await apiRequest('/api/browser-recognition', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image_base64: frameBase64, reference_ids: [] }),
+    return {
+      timestamp: timestampText,
+      identity: identityText,
+      isMatch: Boolean(detection.is_match),
+      confidenceText: `${Math.max(0, (1 - distanceValue) * 100).toFixed(1)}%`,
+      cropBase64: buildFaceCropDataUrl(frameCanvas, detection),
+    };
   });
 
-  return response.detections.map((detectionItem) => ({
-    top: detectionItem.top,
-    right: detectionItem.right,
-    bottom: detectionItem.bottom,
-    left: detectionItem.left,
-  }));
+  // Dua item moi len dau danh sach theo thu tu xuat hien moi nhat.
+  const resultsToPrepend = [...batchResults].reverse();
+  state.results = resultsToPrepend.concat(state.results).slice(0, 50);
+
+  prependResultsIncrementally(resultsToPrepend);
 }
 
-async function detectFacesOnCanvas(canvasElement) {
-  if (state.browser.faceDetector) {
-    const faces = await state.browser.faceDetector.detect(canvasElement);
-    return faces.map((face) => {
-      const x = Math.max(0, Math.floor(face.boundingBox.x));
-      const y = Math.max(0, Math.floor(face.boundingBox.y));
-      const width = Math.max(1, Math.floor(face.boundingBox.width));
-      const height = Math.max(1, Math.floor(face.boundingBox.height));
-      return {
-        top: y,
-        left: x,
-        bottom: y + height,
-        right: x + width,
-      };
-    });
+function createResultItemFragment(result) {
+  const itemFragment = resultItemTemplateElement.content.cloneNode(true);
+  const nameElement = itemFragment.querySelector('.result-name');
+  const timestampElement = itemFragment.querySelector('.result-timestamp');
+  const cropElement = itemFragment.querySelector('.result-crop');
+  const identityElement = itemFragment.querySelector('.result-identity');
+  const confidenceElement = itemFragment.querySelector('.result-confidence');
+
+  nameElement.textContent = result.identity;
+  timestampElement.textContent = result.timestamp;
+  cropElement.src = result.cropBase64;
+  identityElement.textContent = result.isMatch ? 'Matched uploaded face' : 'Unknown face';
+  confidenceElement.textContent = result.confidenceText;
+
+  identityElement.classList.remove('result-positive', 'result-negative');
+  confidenceElement.classList.remove('result-positive', 'result-negative');
+  if (result.isMatch) {
+    identityElement.classList.add('result-positive');
+    confidenceElement.classList.add('result-positive');
+  } else {
+    identityElement.classList.add('result-negative');
+    confidenceElement.classList.add('result-negative');
   }
 
-  // Fallback: detect vi tri mat bang server de luon hoat dong tren moi browser.
-  return detectFacesViaServer(canvasElement);
+  return itemFragment;
 }
 
-async function detectFrameFaces() {
-  if (!state.browser.isRunning) {
+function prependResultsIncrementally(newResults) {
+  const emptyElement = resultsListElement.querySelector('.empty-results');
+  if (emptyElement) {
+    emptyElement.remove();
+  }
+
+  const prependFragment = document.createDocumentFragment();
+  newResults.forEach((result) => {
+    prependFragment.append(createResultItemFragment(result));
+  });
+  resultsListElement.prepend(prependFragment);
+
+  trimHistoryDomToLimit(50);
+}
+
+function trimHistoryDomToLimit(limit) {
+  const resultCards = resultsListElement.querySelectorAll('.result-item');
+  for (let index = limit; index < resultCards.length; index += 1) {
+    resultCards[index].remove();
+  }
+
+  if (resultsListElement.children.length === 0) {
+    renderResultsList();
+  }
+}
+
+function renderResultsList() {
+  resultsListElement.innerHTML = '';
+
+  if (state.results.length === 0) {
+    const emptyElement = document.createElement('p');
+    emptyElement.className = 'empty-results';
+    emptyElement.textContent = 'No detection results yet. Start webcam to begin automatic recognition.';
+    resultsListElement.append(emptyElement);
+    return;
+  }
+
+  const fullFragment = document.createDocumentFragment();
+  state.results.forEach((result) => {
+    fullFragment.append(createResultItemFragment(result));
+  });
+  resultsListElement.append(fullFragment);
+}
+
+async function processRecognitionFrame() {
+  if (!state.browser.isRunning || state.browser.requestInFlight) {
     return;
   }
 
@@ -224,32 +371,45 @@ async function detectFrameFaces() {
     return;
   }
 
-  captureContext.drawImage(
-    browserVideoElement,
-    0,
-    0,
-    state.browser.lastFrameCanvas.width,
-    state.browser.lastFrameCanvas.height,
-  );
+  state.browser.requestInFlight = true;
 
   try {
-    const faces = await detectFacesOnCanvas(state.browser.lastFrameCanvas);
-    state.browser.detectedFaces = faces;
-    drawDetectedFaces(faces);
+    captureContext.drawImage(
+      browserVideoElement,
+      0,
+      0,
+      state.browser.lastFrameCanvas.width,
+      state.browser.lastFrameCanvas.height,
+    );
 
-    if (faces.length > 0) {
-      browserSendButtonElement.disabled = false;
-      setBrowserStatus(`detected ${faces.length} face(s) via ${state.browser.detectionMode} detector - click Send Detected Faces`);
+    const frameBase64 = state.browser.lastFrameCanvas.toDataURL('image/jpeg', state.browser.jpegQuality);
+    const response = await apiRequest('/api/browser-recognition', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_base64: frameBase64,
+        reference_ids: getEffectiveReferenceIds(),
+        result_mode: state.resultsFilter,
+      }),
+    });
+
+    const detections = response.detections || [];
+    addDetectionsToHistory(detections, state.browser.lastFrameCanvas);
+
+    if (detections.length > 0) {
+      const matchedCount = detections.filter((detection) => Boolean(detection.is_match)).length;
+      setBrowserStatus(`processed frame: ${detections.length} face(s), ${matchedCount} matched`);
     } else {
-      browserSendButtonElement.disabled = true;
-      setBrowserStatus(`webcam running (${state.browser.detectionMode}) - no faces detected`);
+      setBrowserStatus('processed frame: no faces detected');
     }
   } catch (error) {
-    setBrowserStatus(`detection error: ${error.message}`, true);
-  }
+    setBrowserStatus(`recognition error: ${error.message}`, true);
+  } finally {
+    state.browser.requestInFlight = false;
 
-  if (state.browser.isRunning) {
-    state.browser.timerId = window.setTimeout(detectFrameFaces, 800);
+    if (state.browser.isRunning) {
+      state.browser.timerId = window.setTimeout(processRecognitionFrame, state.browser.frameIntervalMs);
+    }
   }
 }
 
@@ -268,32 +428,63 @@ async function startBrowserWebcam() {
     return;
   }
 
+  let mediaStream;
   try {
-    const mediaStream = await navigator.mediaDevices.getUserMedia({
+    mediaStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user' },
       audio: false,
     });
+  } catch (error) {
+    console.error('getUserMedia error:', error);
 
+    // Loi cap quyen camera that bai (thiet bi/permission/security).
+    if (error.name === 'NotAllowedError') {
+      setBrowserStatus('camera permission denied by browser', true);
+      showToast('Camera permission denied. Please allow camera access in browser settings.', true);
+      return;
+    }
+    if (error.name === 'NotFoundError') {
+      setBrowserStatus('no webcam device found', true);
+      showToast('No webcam device found on this machine.', true);
+      return;
+    }
+    if (error.name === 'NotReadableError') {
+      setBrowserStatus('webcam is busy (used by another app)', true);
+      showToast('Webcam is being used by another app/tab.', true);
+      return;
+    }
+
+    setBrowserStatus(`cannot open webcam: ${error.message}`, true);
+    showToast(error.message || 'Webcam access error', true);
+    return;
+  }
+
+  try {
     state.browser.mediaStream = mediaStream;
     browserVideoElement.srcObject = mediaStream;
     await browserVideoElement.play();
-    syncBrowserCanvasSize();
-    await initFaceDetector();
+    syncCaptureCanvasSize();
 
     state.browser.isRunning = true;
-    browserSendButtonElement.disabled = true;
-    setBrowserStatus('webcam running - detecting faces...');
-    state.browser.timerId = window.setTimeout(detectFrameFaces, 500);
+    setBrowserStatus(`webcam running - auto recognition every ${formatSamplingIntervalText(state.browser.frameIntervalMs)}`);
+    state.browser.timerId = window.setTimeout(processRecognitionFrame, state.browser.frameIntervalMs);
   } catch (error) {
-    console.error('Webcam access error:', error);
-    setBrowserStatus('unable to access webcam, please allow camera permission', true);
-    showToast(error.message || 'Webcam access error', true);
+    console.error('video.play error:', error);
+
+    // Neu play() fail sau khi da co stream, thu cleanup stream de tranh leak.
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((track) => track.stop());
+    }
+    state.browser.mediaStream = null;
+    browserVideoElement.srcObject = null;
+
+    setBrowserStatus(`webcam stream created but video playback failed: ${error.message}`, true);
+    showToast('Webcam opened but browser could not start video playback. Please reload and try again.', true);
   }
 }
 
 function stopBrowserWebcam() {
   state.browser.isRunning = false;
-  state.browser.detectedFaces = [];
 
   if (state.browser.timerId !== null) {
     window.clearTimeout(state.browser.timerId);
@@ -306,149 +497,59 @@ function stopBrowserWebcam() {
   }
 
   browserVideoElement.srcObject = null;
-  drawDetectedFaces([]);
-  browserSendButtonElement.disabled = true;
   setBrowserStatus('stopped');
-}
-
-function addResultsToHistory(matches, faceCrops) {
-  matches.forEach((match, index) => {
-    const distance = Number(match.distance ?? 1);
-    state.results.unshift({
-      timestamp: new Date().toLocaleTimeString(),
-      identity: match.identity,
-      isMatch: Boolean(match.is_match),
-      confidenceText: `${Math.max(0, (1 - distance) * 100).toFixed(1)}%`,
-      cropBase64: faceCrops[index] ?? '',
-    });
-  });
-
-  if (state.results.length > 200) {
-    state.results = state.results.slice(0, 200);
-  }
-
-  renderResultsList();
-}
-
-function renderResultsList() {
-  resultsListElement.innerHTML = '';
-
-  if (state.results.length === 0) {
-    const emptyElement = document.createElement('p');
-    emptyElement.className = 'empty-results';
-    emptyElement.textContent = 'No detection results yet. Detect and send faces to see results here.';
-    resultsListElement.append(emptyElement);
-    return;
-  }
-
-  state.results.forEach((result) => {
-    const itemFragment = resultItemTemplateElement.content.cloneNode(true);
-    const nameElement = itemFragment.querySelector('.result-name');
-    const timestampElement = itemFragment.querySelector('.result-timestamp');
-    const cropElement = itemFragment.querySelector('.result-crop');
-    const identityElement = itemFragment.querySelector('.result-identity');
-    const confidenceElement = itemFragment.querySelector('.result-confidence');
-
-    nameElement.textContent = result.identity;
-    timestampElement.textContent = result.timestamp;
-    cropElement.src = result.cropBase64;
-    identityElement.textContent = `${result.identity} ${result.isMatch ? '✓' : '(mismatch)'}`;
-    confidenceElement.textContent = result.confidenceText;
-    resultsListElement.append(itemFragment);
-  });
-}
-
-async function sendDetectedFacesToServer() {
-  if (state.browser.detectedFaces.length === 0) {
-    showToast('No detected faces to send', true);
-    return;
-  }
-
-  const selectedReferenceIds = getSelectedReferenceIds();
-  if (selectedReferenceIds.length === 0) {
-    showToast('Please select at least one reference face to match against', true);
-    return;
-  }
-
-  setBrowserStatus('sending detected faces to server...');
-  browserSendButtonElement.disabled = true;
-
-  try {
-    const faceCrops = state.browser.detectedFaces.map((face) => {
-      const cropCanvas = document.createElement('canvas');
-      const cropContext = cropCanvas.getContext('2d');
-      const width = Math.max(1, face.right - face.left);
-      const height = Math.max(1, face.bottom - face.top);
-      cropCanvas.width = width;
-      cropCanvas.height = height;
-
-      cropContext.drawImage(
-        browserVideoElement,
-        face.left,
-        face.top,
-        width,
-        height,
-        0,
-        0,
-        width,
-        height,
-      );
-      return cropCanvas.toDataURL('image/jpeg', 0.85);
-    });
-
-    const payload = {
-      face_crops: faceCrops,
-      face_locations: state.browser.detectedFaces,
-      reference_ids: selectedReferenceIds,
-    };
-
-    const response = await apiRequest('/api/browser-detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-
-    addResultsToHistory(response.matches, faceCrops);
-    setBrowserStatus(`matched ${response.matches.length} face(s)`);
-  } catch (error) {
-    setBrowserStatus(`server error: ${error.message}`, true);
-    showToast(error.message, true);
-  } finally {
-    browserSendButtonElement.disabled = state.browser.detectedFaces.length === 0;
-  }
 }
 
 referenceFormElement.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  const labelInputElement = document.querySelector('#reference-label');
-  const imageInputElement = document.querySelector('#reference-image');
+  const hasName = referenceLabelInputElement.value.trim().length > 0;
+  if (!hasName) {
+    showToast('Please enter display name', true);
+    return;
+  }
 
-  if (!imageInputElement.files || imageInputElement.files.length === 0) {
+  if (!referenceImageInputElement.files || referenceImageInputElement.files.length === 0) {
     showToast('Please choose a face image', true);
     return;
   }
 
   const formData = new FormData();
-  formData.append('label', labelInputElement.value);
-  formData.append('image', imageInputElement.files[0]);
+  formData.append('label', referenceLabelInputElement.value.trim());
+  formData.append('image', referenceImageInputElement.files[0]);
 
   try {
-    await apiRequest('/api/references', { method: 'POST', body: formData });
+    const createdReference = await apiRequest('/api/references', { method: 'POST', body: formData });
+    state.references = [
+      createdReference,
+      ...state.references.filter((item) => item.reference_id !== createdReference.reference_id),
+    ];
+    renderReferenceList();
+
     referenceFormElement.reset();
-    await refreshReferences();
+    updateSelectedFileName();
+    updateUploadSubmitState();
     showToast('Reference uploaded successfully');
   } catch (error) {
     showToast(error.message, true);
   }
 });
 
+referenceLabelInputElement.addEventListener('input', () => {
+  updateUploadSubmitState();
+});
+
+referenceImageInputElement.addEventListener('change', () => {
+  updateSelectedFileName();
+  updateUploadSubmitState();
+});
+
 browserVideoElement.addEventListener('loadedmetadata', () => {
-  syncBrowserCanvasSize();
+  syncCaptureCanvasSize();
 });
 
 window.addEventListener('resize', () => {
-  syncBrowserCanvasSize();
+  syncCaptureCanvasSize();
 });
 
 browserStartButtonElement.addEventListener('click', () => {
@@ -459,16 +560,39 @@ browserStopButtonElement.addEventListener('click', () => {
   stopBrowserWebcam();
 });
 
-browserSendButtonElement.addEventListener('click', () => {
-  sendDetectedFacesToServer().catch((error) => showToast(error.message, true));
+samplingIntervalRangeElement.addEventListener('input', (event) => {
+  const intervalMs = Number(event.target.value);
+  applySamplingInterval(intervalMs);
 });
 
 window.addEventListener('beforeunload', () => {
+  if (state.uploadPreviewObjectUrl) {
+    URL.revokeObjectURL(state.uploadPreviewObjectUrl);
+  }
   stopBrowserWebcam();
+});
+
+resultsFilterButtonElements.forEach((filterButtonElement) => {
+  filterButtonElement.addEventListener('click', () => {
+    const nextFilterMode = filterButtonElement.dataset.filterMode || 'all';
+    if (nextFilterMode === state.resultsFilter) {
+      return;
+    }
+
+    state.resultsFilter = nextFilterMode;
+    syncResultsFilterUi();
+    // Clear log de dong bo voi che do backend moi.
+    state.results = [];
+    renderResultsList();
+  });
 });
 
 try {
   validateRequiredElements();
+  updateSelectedFileName();
+  updateUploadSubmitState();
+  applySamplingInterval(DEFAULT_SAMPLING_INTERVAL_MS);
+  syncResultsFilterUi();
   renderResultsList();
   refreshReferences().catch((error) => showToast(error.message, true));
 } catch (error) {

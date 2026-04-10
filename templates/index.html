@@ -3,67 +3,80 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Face Match Studio</title>
+  <title>VeriFace</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/styles.css" />
-  <!-- Face detection library for browser-side face detection -->
-  <script async src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 </head>
 <body>
   <main class="page">
     <section class="hero">
-      <h1>Face Match Studio</h1>
-      <p>Upload reference faces, then run live matching from the user's own webcam directly in the browser.</p>
+      <div class="brand-bar">
+        <div class="brand-copy">
+          <h1>VeriFace</h1>
+          <p>An Open-source Face Recognition Console</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel panel-upload panel-upload-compact">
+      <h2>Reference Gallery</h2>
+      <div class="reference-strip">
+        <form id="reference-form" class="upload-composer">
+          <div class="file-upload-wrap">
+            <input id="reference-image" type="file" name="image" accept="image/png,image/jpeg" required />
+            <label for="reference-image" class="upload-card" id="reference-upload-card">
+              <img id="reference-image-preview" class="upload-preview" alt="Selected face preview" />
+              <div class="upload-placeholder">
+                <span class="upload-plus">+</span>
+              </div>
+            </label>
+          </div>
+          <div class="upload-input-row">
+            <input id="reference-label" type="text" name="label" placeholder="Display Name" required />
+            <button id="reference-upload-submit" type="submit" class="save-check-btn" disabled aria-label="Save reference">✓</button>
+          </div>
+        </form>
+        <div id="reference-list" class="reference-grid reference-grid-compact"></div>
+      </div>
     </section>
 
     <section class="workspace-grid">
-      <article class="panel panel-upload">
-        <h2>Reference Gallery</h2>
-        <p class="panel-note">Upload clear, front-facing photos. One face per image works best.</p>
-        <form id="reference-form" class="form-grid">
-          <label>
-            Display Name
-            <input id="reference-label" type="text" name="label" placeholder="e.g. Alex Johnson" />
-          </label>
-          <label>
-            Face Image
-            <input id="reference-image" type="file" name="image" accept="image/png,image/jpeg" required />
-          </label>
-          <button type="submit">Upload Reference</button>
-        </form>
-        <div id="reference-list" class="reference-grid"></div>
-      </article>
-
       <article class="panel panel-live">
         <h2>Live Browser Webcam</h2>
-        <p class="panel-note">Real-time face detection with local browser processing. Sends detected faces to server for matching on demand.</p>
         
         <div class="browser-controls">
           <button id="browser-start-btn" type="button">Start Webcam</button>
           <button id="browser-stop-btn" type="button" class="danger-btn">Stop Webcam</button>
-          <button id="browser-send-btn" type="button" class="secondary-btn" disabled>Send Detected Faces</button>
+          <div class="sampling-inline" aria-label="Sampling interval control">
+            <span class="sampling-inline-label">Sampling</span>
+            <input id="sampling-interval" type="range" min="100" max="5000" step="100" value="1000" />
+            <span id="sampling-interval-value" class="sampling-inline-value">1.0 s</span>
+          </div>
         </div>
         <div class="browser-stage">
           <video id="browser-video" autoplay playsinline muted></video>
-          <canvas id="browser-overlay"></canvas>
         </div>
-        <p id="browser-status" class="stream-stats">Status: idle</p>
       </article>
 
       <article class="panel panel-results">
-        <h2>Detection & Match History</h2>
+        <div class="results-header">
+          <h2>Detection History</h2>
+          <div class="results-filter-wrap" role="group" aria-label="Detection history filter">
+            <span class="results-filter-label">Show</span>
+            <div class="results-filter-toggle" id="results-filter">
+              <button type="button" class="results-filter-btn" data-filter-mode="all">All Faces</button>
+              <button type="button" class="results-filter-btn is-active" data-filter-mode="matched-only">Uploaded Only</button>
+            </div>
+          </div>
+        </div>
         <div id="results-list" class="results-list"></div>
       </article>
     </section>
 
     <template id="reference-card-template">
       <article class="reference-card">
-        <label class="select-wrap">
-          <input type="checkbox" class="reference-select" />
-          <span>Select</span>
-        </label>
         <img class="reference-photo" alt="Reference face" loading="lazy" />
         <div class="reference-meta">
           <h3 class="reference-name"></h3>
@@ -75,15 +88,17 @@
 
     <template id="result-item-template">
       <article class="result-item">
-        <div class="result-header">
-          <h4 class="result-name"></h4>
-          <p class="result-timestamp"></p>
-        </div>
         <div class="result-body">
           <img class="result-crop" alt="Detected face" />
           <div class="result-details">
-            <p><strong>Identity:</strong> <span class="result-identity"></span></p>
-            <p><strong>Confidence:</strong> <span class="result-confidence"></span></p>
+            <div class="result-line result-line-top">
+              <p class="result-timestamp"></p>
+              <h4 class="result-name"></h4>
+            </div>
+            <div class="result-line result-line-meta">
+              <span class="result-identity"></span>
+              <span class="result-confidence"></span>
+            </div>
           </div>
         </div>
       </article>
