@@ -9,6 +9,8 @@
 VeriFace is a browser-first face recognition app built with FastAPI, `face_recognition`, and OpenCV.
 Webcam frames are captured in the browser and sent to the backend for matching against uploaded references.
 
+<p><sub>VeriFace la ung dung nhan dien khuon mat theo huong browser-first, duoc xay dung bang FastAPI, <code>face_recognition</code> va OpenCV. Khung hinh webcam duoc lay tu trinh duyet va gui ve backend de doi sanh voi cac khuon mat tham chieu da tai len.</sub></p>
+
 ## Demo
 
 <p align="center">
