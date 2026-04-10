@@ -1,167 +1,95 @@
-# VeriFace
+# Project Name
+VeriFace
 
-<p align="center">
-  <img src="docs/assets/veriface-logo.svg" alt="VeriFace logo" width="520" />
-</p>
+This component is **Active (Beta)**.
 
-<p align="center"><strong>Open-source, browser-first face recognition system.</strong></p>
+## Overview
+VeriFace is a browser-first face recognition component for lightweight deployment scenarios. It matters because it keeps webcam capture on the client side while performing recognition on the server, reducing device-specific camera handling on backend hosts.
 
-VeriFace is a browser-first face recognition app built with FastAPI, `face_recognition`, and OpenCV.
-Webcam frames are captured in the browser and sent to the backend for matching against uploaded references.
-
-<p><sub>VeriFace la ung dung nhan dien khuon mat theo huong browser-first, duoc xay dung bang FastAPI, <code>face_recognition</code> va OpenCV. Khung hinh webcam duoc lay tu trinh duyet va gui ve backend de doi sanh voi cac khuon mat tham chieu da tai len.</sub></p>
-
-## Demo
+Demo:
 
 <p align="center">
   <img src="docs/assets/demo.png" alt="VeriFace demo" width="980" />
 </p>
 
-## Key Features
+## Getting Started
+Installation steps:
 
-- Browser webcam capture only (`getUserMedia`)
-- Reference enrollment with duplicate-face protection
-- Adjustable sampling interval for frame recognition
-- Detection history with timestamp, identity, confidence, and face crop
-- Result mode filtering: `all` or `matched-only`
-- HTTPS-first deployment via Docker Compose
-
-## Tech Stack
-
-- Backend: FastAPI, `face_recognition`, `opencv-python-headless`
-- Frontend: Vanilla HTML/CSS/JavaScript
-- Deployment: Docker + Docker Compose
-
-## Project Structure
-
-```text
-app/
-  main.py            # FastAPI routes
-  face_registry.py   # Reference enrollment and deduplication
-  models.py          # API request/response models
-static/
-  app.js             # Frontend runtime logic
-  styles.css         # UI styles
-templates/
-  index.html         # Main web interface
-data/
-  references/        # Persisted reference images
-docs/
-  assets/
-    demo.png
-    veriface-logo.svg
-Dockerfile
-docker-compose.yml
-start.sh
-requirements.txt
-```
-
-## Quick Start (Docker Compose, HTTPS)
-
-### Prerequisites
-
-- Docker Engine + Docker Compose plugin
-- TLS files at:
-  - `certs/cert.pem`
-  - `certs/key.pem`
-
-### Build and Run
+1. Ensure Docker Engine and Docker Compose are installed.
+2. Ensure TLS certificates exist:
+3. `certs/cert.pem`
+4. `certs/key.pem`
+5. Start services:
 
 ```bash
 docker compose up --build
 ```
 
-Run in detached mode:
+Configuration:
+
+- HTTPS port: `8443` (mapped to app port `8000` inside container)
+- Data persistence: `./data:/app/data`
+- TLS cert mount: `./certs:/app/certs:ro`
+
+Example usage:
+
+1. Open `https://<host-or-ip>:8443`.
+2. Upload reference images in `Reference Gallery`.
+3. Start webcam and choose sampling interval (100ms to 5s).
+4. Monitor results in `Detection History`.
+
+## Deployment
+Architecture + setup:
+
+- Frontend: Browser captures webcam frames and sends base64 images.
+- Backend: FastAPI receives frames, detects/matches faces via `face_recognition`.
+- Storage: references are persisted in `data/references`.
+- Runtime: single HTTPS service via `docker-compose.yml`.
+
+Deployment command:
 
 ```bash
 docker compose up -d --build
 ```
 
-Stop services:
+Stop command:
 
 ```bash
 docker compose down
 ```
 
-Open app:
+## Features
+- Browser-only webcam capture with periodic recognition
+- Reference enrollment with duplicate-face protection
+- Live sampling interval control (100ms to 5s)
+- Detection history with compact cards and result filtering
+- HTTPS-first Docker Compose deployment
 
-`https://<host-or-ip>:8443`
+## Advanced Configuration
+### HTTPS and Runtime Tuning
+Details:
 
-## Usage Flow
+- `HOST`, `PORT`, `WORKERS` can be tuned via compose environment.
+- SSL paths are configured by `SSL_CERT_FILE` and `SSL_KEY_FILE`.
+- Recognition cadence can be tuned from the UI sampling slider.
 
-1. Upload one face image and enter a display name.
-2. The backend validates the image (exactly one face).
-3. Duplicate face enrollment is rejected automatically.
-4. Start webcam from the browser UI.
-5. Frames are sent periodically based on the selected sampling interval.
-6. Recognition results are appended to Detection History.
+## Configuration Options
+`HOST`: Bind address for uvicorn (default `0.0.0.0`)
 
-## API Overview
+`PORT`: Internal uvicorn port (default `8000`)
 
-### `POST /api/references`
+`WORKERS`: Number of uvicorn workers (default `1`)
 
-Enroll a reference face.
+`SSL_CERT_FILE`: Path to TLS certificate in container (`/app/certs/cert.pem`)
 
-Form-data:
-- `label` (optional)
-- `image` (required, jpg/jpeg/png)
+`SSL_KEY_FILE`: Path to TLS private key in container (`/app/certs/key.pem`)
 
-Common errors:
-- Unsupported file format
-- No face detected
-- More than one face detected
-- Duplicate face already enrolled
+`result_mode`: Recognition response filter mode (`all` or `matched-only`)
 
-### `GET /api/references`
+`sampling interval`: Frontend recognition polling interval (100ms to 5000ms)
 
-List enrolled references.
-
-### `GET /api/references/{reference_id}/image`
-
-Get stored reference image.
-
-### `DELETE /api/references/{reference_id}`
-
-Delete a reference by ID.
-
-### `POST /api/browser-recognition`
-
-Recognize faces from a browser frame.
-
-```json
-{
-  "image_base64": "data:image/jpeg;base64,...",
-  "reference_ids": ["id-1", "id-2"],
-  "result_mode": "matched-only"
-}
-```
-
-`result_mode` values:
-- `all`
-- `matched-only`
-
-## Notes
-
-- Webcam permission is handled by the browser.
-- For LAN/non-localhost camera access, HTTPS is recommended.
-- Recognition speed depends on CPU and frame resolution.
-- Data is persisted via `./data:/app/data` volume mount.
-
-## Troubleshooting
-
-### Camera does not start
-
-- Grant camera permission in browser settings.
-- Verify valid HTTPS certificate setup.
-- Ensure no other app is locking the webcam.
-
-### Upload is rejected
-
-- Use JPG/JPEG/PNG only.
-- Ensure the image contains exactly one visible face.
-
-### Recognition is slow
-
-- Increase sampling interval.
-- Lower webcam resolution.
-- Allocate more CPU resources to Docker.
+## Tips
+- Use clear, front-facing images with exactly one face per reference.
+- If recognition feels slow, increase sampling interval before scaling compute.
+- For LAN access, trust/install your cert on client devices to avoid browser camera restrictions.
+- Keep `./data` mounted to preserve references across container restarts.
