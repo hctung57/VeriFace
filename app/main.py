@@ -31,7 +31,7 @@ BASE_DIR: Path = Path(__file__).resolve().parent.parent
 REFERENCE_DIR: Path = BASE_DIR / "data" / "references"
 
 face_registry = FaceRegistry(storage_dir=REFERENCE_DIR)
-app = FastAPI(title="Face Recognition Tracking Server", version="2.0.0")
+app = FastAPI(title="OdinEye", version="2.0.0")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
